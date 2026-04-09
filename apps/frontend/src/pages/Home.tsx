@@ -22,7 +22,6 @@ export const Home: React.FC = () => {
   const [text, setText] = useState('Ainda que as palavras sejam incapazes de traduzir o imenso carinho que sinto por você, permita-me silenciar e deixar o meu coração falar.');
   const [controls, setControls] = useState<VoiceControlsType>(DEFAULT_CONTROLS);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [audioFormat, setAudioFormat] = useState<'mp3' | 'wav'>('mp3');
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedVoiceId, setSelectedVoiceId] = useState('pedro');
@@ -100,7 +99,6 @@ export const Home: React.FC = () => {
         controls,
       });
       setAudioUrl(result.audioUrl);
-      setAudioFormat(result.format === 'wav' ? 'wav' : 'mp3');
       setLastGeneratedText(text);
       setLastGeneratedVoice(selectedVoiceId);
       setLastGeneratedControls(controls);
@@ -118,7 +116,7 @@ export const Home: React.FC = () => {
     
     const link = document.createElement('a');
     link.href = audioUrl;
-    link.download = `textovox-${selectedVoiceId}-${Date.now()}.${audioFormat}`;
+    link.download = `textovox-${selectedVoiceId}-${Date.now()}.mp3`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

@@ -20,7 +20,6 @@ export interface PreviewRequest {
 export interface PreviewResponse {
   audioUrl: string;
   duration: number;
-  format: string;
   status: string;
   message: string;
   ssmlUsed?: string;
@@ -40,13 +39,10 @@ export const ttsApi = {
     });
     
     const audioUrl = URL.createObjectURL(response.data);
-    const contentType = response.headers['content-type'] || 'audio/mpeg';
-    const format = contentType.includes('wav') ? 'wav' : 'mp3';
     
     return {
       audioUrl,
       duration: 0,
-      format,
       status: 'success',
       message: 'Audio stream received',
       ssmlUsed: response.headers['x-ssml-used']

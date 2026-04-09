@@ -3,29 +3,12 @@ import { TTSAdapter, TTSPreviewResult, TTSRenderResult } from './TTSAdapter';
 import { Readable } from 'stream';
 
 type OpenAIVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
-type EmotionKey = 'neutral' | 'whisper' | 'giggles' | 'sarcastic' | 'shouting';
 
 interface VoiceProfile {
   key: string;
   aliases: string[];
   baseVoice: OpenAIVoice;
   instruction: string;
-}
-
-interface EmotionProfile {
-  key: EmotionKey;
-  aliases: string[];
-  speedMultiplier: number;
-}
-
-interface EmotionSegment {
-  emotion: EmotionKey;
-  text: string;
-}
-
-interface WavDescriptor {
-  formatChunk: Buffer;
-  dataChunk: Buffer;
 }
 
 const VOICE_PROFILES: VoiceProfile[] = [
@@ -73,40 +56,7 @@ const VOICE_PROFILES: VoiceProfile[] = [
   }
 ];
 
-const EMOTION_PROFILES: EmotionProfile[] = [
-  {
-    key: 'whisper',
-    aliases: ['whisper', 'sussurro'],
-    speedMultiplier: 0.82
-  },
-  {
-    key: 'giggles',
-    aliases: ['giggles', 'risos'],
-    speedMultiplier: 1.04
-  },
-  {
-    key: 'sarcastic',
-    aliases: ['sarcastic', 'sarcástico'],
-    speedMultiplier: 0.95
-  },
-  {
-    key: 'shouting',
-    aliases: ['shouting', 'gritando'],
-    speedMultiplier: 1.12
-  }
-];
-
-const EMOTION_ALIAS_MAP = new Map<string, EmotionKey>(
-  EMOTION_PROFILES.flatMap((profile) => profile.aliases.map((alias) => [alias, profile.key] as const))
-);
-
-const TAG_ALIASES_PATTERN = Array.from(EMOTION_ALIAS_MAP.keys())
-  .sort((a, b) => b.length - a.length)
-  .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  .join('|');
-
-const RAW_TAG_REGEX = new RegExp(`\\[{1,2}\\s*(${TAG_ALIASES_PATTERN})\\s*\\]{1,2}`, 'gi');
-const NORMALIZED_TAG_REGEX = /\[(whisper|giggles|sarcastic|shouting)\]/gi;
+const LEGACY_TAG_REGEX = /\[{1,2}\s*(whisper|sussurro|giggles|risos|sarcastic|sarcástico|shouting|gritando)\s*\]{1,2}/gi;
 
 export class ProviderOpenAITTS implements TTSAdapter {
   private openai: OpenAI;
@@ -120,18 +70,8 @@ export class ProviderOpenAITTS implements TTSAdapter {
   }
 
   async preview(input: string, options?: any): Promise<TTSPreviewResult> {
-    const normalizedInput = this.normalizeEmotionTags(input);
-    const { speed, voice, voiceProfile } = this.mapControlsToOptions(options);
-
-    if (this.shouldUseExpressivePipeline(normalizedInput, options)) {
-      const buffer = await this.renderExpressiveAudio(normalizedInput, speed, voice, voiceProfile);
-      return {
-        stream: Readable.from([buffer]),
-        contentType: 'audio/wav'
-      };
-    }
-
-    const cleanInput = this.stripEmotionTags(normalizedInput);
+    const { speed, voice } = this.mapControlsToOptions(options);
+    const cleanInput = this.stripLegacyTags(input);
     const response = await this.openai.audio.speech.create({
       model: 'tts-1-hd',
       voice,
@@ -147,20 +87,10 @@ export class ProviderOpenAITTS implements TTSAdapter {
   }
 
   async render(input: string, options?: any): Promise<TTSRenderResult> {
-    const normalizedInput = this.normalizeEmotionTags(input);
-    const { speed, voice, voiceProfile } = this.mapControlsToOptions(options);
-
-    if (this.shouldUseExpressivePipeline(normalizedInput, options)) {
-      const buffer = await this.renderExpressiveAudio(normalizedInput, speed, voice, voiceProfile);
-      return {
-        buffer,
-        contentType: 'audio/wav'
-      };
-    }
-
+    const { speed, voice } = this.mapControlsToOptions(options);
     return {
-      buffer: await this.generateSpeechBuffer(this.stripEmotionTags(normalizedInput) || ' ', voice, speed, 'wav'),
-      contentType: 'audio/wav'
+      buffer: await this.generateSpeechBuffer(this.stripLegacyTags(input) || ' ', voice, speed, 'mp3'),
+      contentType: 'audio/mpeg'
     };
   }
 
@@ -195,150 +125,11 @@ export class ProviderOpenAITTS implements TTSAdapter {
     return VOICE_PROFILES.find((profile) => profile.aliases.some((alias) => normalizedVoiceId.includes(alias)));
   }
 
-  private shouldUseExpressivePipeline(input: string, options?: any) {
-    return this.hasEmotionTags(input) || Boolean(options?.expressive);
+  private stripLegacyTags(input: string) {
+    return input.replace(LEGACY_TAG_REGEX, ' ').replace(/\s+/g, ' ').trim();
   }
 
-  private hasEmotionTags(input: string) {
-    return input.match(RAW_TAG_REGEX) !== null;
-  }
-
-  private normalizeEmotionTags(input: string) {
-    return input.replace(RAW_TAG_REGEX, (_, rawTag: string) => {
-      const canonical = EMOTION_ALIAS_MAP.get(rawTag.toLowerCase()) || 'neutral';
-      return canonical === 'neutral' ? '' : `[${canonical}]`;
-    });
-  }
-
-  private stripEmotionTags(input: string) {
-    return input.replace(RAW_TAG_REGEX, ' ').replace(NORMALIZED_TAG_REGEX, ' ').replace(/\s+/g, ' ').trim();
-  }
-
-  private parseEmotionSegments(input: string): EmotionSegment[] {
-    const normalized = this.normalizeEmotionTags(input);
-    const segments: EmotionSegment[] = [];
-    let currentEmotion: EmotionKey = 'neutral';
-    let lastIndex = 0;
-
-    normalized.replace(NORMALIZED_TAG_REGEX, (match, emotion: string, offset: number) => {
-      const text = normalized.slice(lastIndex, offset);
-      this.pushSegmentChunks(segments, currentEmotion, text);
-      currentEmotion = emotion.toLowerCase() as EmotionKey;
-      lastIndex = offset + match.length;
-      return match;
-    });
-
-    this.pushSegmentChunks(segments, currentEmotion, normalized.slice(lastIndex));
-
-    if (!segments.length) {
-      const cleanText = this.stripEmotionTags(normalized);
-      if (cleanText) {
-        segments.push({ emotion: 'neutral', text: cleanText });
-      }
-    }
-
-    return segments;
-  }
-
-  private pushSegmentChunks(segments: EmotionSegment[], emotion: EmotionKey, text: string) {
-    const cleanText = text.replace(/\s+/g, ' ').trim();
-    if (!cleanText) {
-      return;
-    }
-
-    for (const chunk of this.splitLongText(cleanText)) {
-      segments.push({ emotion, text: chunk });
-    }
-  }
-
-  private splitLongText(text: string) {
-    if (text.length <= 220) {
-      return [text];
-    }
-
-    const sentences = text.match(/[^.!?;:]+[.!?;:]?/g)?.map((part) => part.trim()).filter(Boolean) || [text];
-    const chunks: string[] = [];
-    let current = '';
-
-    for (const sentence of sentences) {
-      if (sentence.length > 220) {
-        if (current) {
-          chunks.push(current);
-          current = '';
-        }
-
-        chunks.push(...this.splitByWords(sentence, 180));
-        continue;
-      }
-
-      const candidate = current ? `${current} ${sentence}` : sentence;
-      if (candidate.length > 220 && current) {
-        chunks.push(current);
-        current = sentence;
-      } else {
-        current = candidate;
-      }
-    }
-
-    if (current) {
-      chunks.push(current);
-    }
-
-    return chunks;
-  }
-
-  private splitByWords(text: string, limit: number) {
-    const words = text.split(/\s+/).filter(Boolean);
-    const chunks: string[] = [];
-    let current = '';
-
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > limit && current) {
-        chunks.push(current);
-        current = word;
-      } else {
-        current = candidate;
-      }
-    }
-
-    if (current) {
-      chunks.push(current);
-    }
-
-    return chunks;
-  }
-
-  private getEmotionProfile(emotion: EmotionKey) {
-    return EMOTION_PROFILES.find((profile) => profile.key === emotion);
-  }
-
-  private async renderExpressiveAudio(input: string, baseSpeed: number, voice: OpenAIVoice, voiceProfile?: VoiceProfile) {
-    const segments = this.parseEmotionSegments(input);
-    const buffers: Buffer[] = [];
-
-    for (const segment of segments) {
-      const segmentVoice = voiceProfile?.baseVoice || voice;
-      buffers.push(
-        await this.generateSpeechBuffer(
-          segment.text,
-          segmentVoice,
-          this.getSegmentSpeed(baseSpeed, segment.emotion),
-          'wav'
-        )
-      );
-    }
-
-    return this.mergeWavBuffers(buffers);
-  }
-
-  private getSegmentSpeed(baseSpeed: number, emotion: EmotionKey) {
-    const profile = this.getEmotionProfile(emotion);
-    const emotionSpeed = profile ? baseSpeed * profile.speedMultiplier : baseSpeed;
-    return Math.max(0.25, Math.min(4.0, emotionSpeed));
-  }
-
-  private async generateSpeechBuffer(input: string, voice: OpenAIVoice, speed: number, format: 'mp3' | 'wav') {
+  private async generateSpeechBuffer(input: string, voice: OpenAIVoice, speed: number, format: 'mp3') {
     const response = await this.openai.audio.speech.create({
       model: 'tts-1-hd',
       voice,
@@ -361,93 +152,5 @@ export class ProviderOpenAITTS implements TTSAdapter {
     }
 
     throw new Error('Unexpected response body type from OpenAI SDK');
-  }
-
-  private mergeWavBuffers(buffers: Buffer[]) {
-    if (!buffers.length) {
-      throw new Error('No WAV buffers generated');
-    }
-
-    if (buffers.length === 1) {
-      return buffers[0];
-    }
-
-    const descriptors = buffers.map((buffer) => this.parseWav(buffer));
-    const firstDescriptor = descriptors[0];
-    const totalDataLength = descriptors.reduce((sum, descriptor) => sum + descriptor.dataChunk.length, 0);
-    const riffSize = 4 + (8 + firstDescriptor.formatChunk.length) + (8 + totalDataLength);
-    const padding = totalDataLength % 2 === 1 ? 1 : 0;
-    const output = Buffer.alloc(12 + 8 + firstDescriptor.formatChunk.length + 8 + totalDataLength + padding);
-    let offset = 0;
-
-    output.write('RIFF', offset);
-    offset += 4;
-    output.writeUInt32LE(riffSize + padding, offset);
-    offset += 4;
-    output.write('WAVE', offset);
-    offset += 4;
-
-    output.write('fmt ', offset);
-    offset += 4;
-    output.writeUInt32LE(firstDescriptor.formatChunk.length, offset);
-    offset += 4;
-    firstDescriptor.formatChunk.copy(output, offset);
-    offset += firstDescriptor.formatChunk.length;
-
-    output.write('data', offset);
-    offset += 4;
-    output.writeUInt32LE(totalDataLength, offset);
-    offset += 4;
-
-    for (const descriptor of descriptors) {
-      if (!descriptor.formatChunk.equals(firstDescriptor.formatChunk)) {
-        throw new Error('Incompatible WAV segments generated for merge');
-      }
-
-      descriptor.dataChunk.copy(output, offset);
-      offset += descriptor.dataChunk.length;
-    }
-
-    return output;
-  }
-
-  private parseWav(buffer: Buffer): WavDescriptor {
-    if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
-      throw new Error('Invalid WAV buffer');
-    }
-
-    let offset = 12;
-    let formatChunk: Buffer | undefined;
-    let dataChunk: Buffer | undefined;
-
-    while (offset + 8 <= buffer.length) {
-      const chunkId = buffer.toString('ascii', offset, offset + 4);
-      const chunkSize = buffer.readUInt32LE(offset + 4);
-      const chunkStart = offset + 8;
-      const chunkEnd = chunkSize === 0xffffffff ? buffer.length : chunkStart + chunkSize;
-
-      if (chunkEnd > buffer.length && chunkId !== 'data') {
-        break;
-      }
-
-      if (chunkId === 'fmt ') {
-        formatChunk = buffer.slice(chunkStart, chunkEnd);
-      }
-
-      if (chunkId === 'data') {
-        dataChunk = buffer.slice(chunkStart, Math.min(chunkEnd, buffer.length));
-      }
-
-      offset = chunkEnd + (chunkSize % 2);
-    }
-
-    if (!formatChunk || !dataChunk) {
-      throw new Error('WAV buffer missing fmt or data chunk');
-    }
-
-    return {
-      formatChunk,
-      dataChunk
-    };
   }
 }
