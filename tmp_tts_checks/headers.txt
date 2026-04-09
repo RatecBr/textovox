@@ -1,9 +1,0 @@
-HTTP/1.1 200 OK
-X-Powered-By: Express
-Access-Control-Allow-Origin: *
-Content-Type: audio/wav
-Transfer-Encoding: chunked
-Date: Sun, 29 Mar 2026 02:58:32 GMT
-Connection: keep-alive
-Keep-Alive: timeout=5
-

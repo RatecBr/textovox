@@ -6,6 +6,7 @@ build/
 .turbo/
 .cache/
 coverage/
+tmp_tts_checks/
 
 .env
 .env.*
@@ -21,4 +22,3 @@ Thumbs.db
 
 .idea/
 .vscode/
-
