@@ -1,0 +1,14 @@
+﻿{
+    "voice":  "rick",
+    "controls":  {
+                     "intensity":  0.5,
+                     "pause_before":  0,
+                     "volume":  0,
+                     "provider":  "openai",
+                     "pitch":  0,
+                     "rate":  1,
+                     "humanization":  0.3,
+                     "timbre":  0
+                 },
+    "text":  "[risos] eu preciso te contar um segredo. isso foi engraçado. agora me escuta!"
+}
