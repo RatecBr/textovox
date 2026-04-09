@@ -27,7 +27,7 @@ export interface PreviewResponse {
 }
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api', // Ensure absolute URL or proxy
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   headers: {
     'Content-Type': 'application/json',
   },
